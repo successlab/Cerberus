@@ -45,10 +45,15 @@ header port_metadata {
     bit<16> f2;
     bit<8> f3;
 }
+header upload_h {
+    //pkt_type_t  pkt_type;
+	bit<8> upload_type;
+}
 struct metadata_t { 
     port_metadata   port_md;
     bit<8>          resub_type;
     resubmit_type_c a;
+	MirrorId_t ing_mir_ses; 
 }
 // ---------------------------------------------------------------------------
 // Ingress parser
@@ -92,16 +97,11 @@ parser SwitchIngressParser(
         pkt.extract(hdr.ipv4);
         transition select(hdr.ipv4.protocol){
 			IP_PROTOCOLS_TCP: parse_tcp;
-			IP_PROTOCOLS_UDP: parse_udp;
 			default: accept;
 		}
     }
 	state parse_tcp {
         pkt.extract(hdr.tcp);
-        transition accept;
-    }
-	state parse_udp {
-        pkt.extract(hdr.udp);
         transition accept;
     }
 }
@@ -115,9 +115,13 @@ control SwitchIngressDeparser(
         in metadata_t ig_md,
 	  in ingress_intrinsic_metadata_for_deparser_t	ig_intr_dprsr_md) {
 	Resubmit() resubmit;
+	Mirror() mirror;
     apply {
 		if (ig_intr_dprsr_md.resubmit_type == DPRSR_DIGEST_TYPE_A) {
 			resubmit.emit(ig_md.a);
+		}
+		else if(ig_intr_dprsr_md.mirror_type == 1){
+			mirror.emit<upload_h>(ig_md.ing_mir_ses, {ig_md.resub_type});
 		}
 		pkt.emit(hdr);
     }
@@ -131,11 +135,7 @@ control SwitchIngress(
         inout ingress_intrinsic_metadata_for_deparser_t ig_dprsr_md,
         inout ingress_intrinsic_metadata_for_tm_t ig_tm_md) {
 	
-bit<1> comp0_flag = 0;
 
-bit<2> comp1_flag = 0;
-
-bit<1> comp2_flag = 0;
 CRCPolynomial<bit<32>>(
 	32w0x04C11DB7, // polynomial 
 	true,          // reversed 
@@ -151,85 +151,149 @@ bit<32> global_time1 = 0;
 
 bit<32> reg_c_timer1_res = 0;
 
-bit<32> reg_c2_key = 0;
-bit<32> reg_c5_key = 0;
+bit<32> reg_time_key = 0;
+bit<32> reg_key = 0;
 
-bit<32> reg_c2_toupdate_value = 0;
-bit<32> reg_c5_toupdate_value = 0;
+bit<32> reg_toupdate_value = 0;
 
-bit<32> reg_c2_res = 0;
-bit<32> reg_c5_res = 0;
+bit<32> reg_class0_w1_res = 0;
+bit<32> reg_class1_w1_res = 0;
+bit<32> reg_class2_w1_res = 0;
+bit<32> reg_class3_w1_res = 0;
+bit<32> reg_class0_w2_res = 0;
+bit<32> reg_class1_w2_res = 0;
+bit<32> reg_class2_w2_res = 0;
+bit<32> reg_class3_w2_res = 0;
+bit<32> reg_res = 0;
 
-bit<32> reg_c2_reset_flag = 0;
+bit<32> reg_reset_flag01 = 0;
+bit<32> reg_reset_flag11 = 0;
+bit<32> reg_reset_flag21 = 0;
+bit<32> reg_reset_flag31 = 0;
+bit<32> reg_reset_flag02 = 0;
+bit<32> reg_reset_flag12 = 0;
+bit<32> reg_reset_flag22 = 0;
+bit<32> reg_reset_flag32 = 0;
 
-bit<32> extracted_reg_c2_res_slice0 = 0;
+bit<32> extracted_reg_class0_res_slice0 = 0;
+bit<32> extracted_reg_class1_res_slice0 = 0;
+bit<32> extracted_reg_class2_res_slice0 = 0;
+bit<32> extracted_reg_class3_res_slice0 = 0;
 
-bit<32> extracted_reg_c2_res_slice1 = 0;
-
-bit<32> extracted_reg_c2_res_slice2 = 0;
-
-bit<32> extracted_reg_c2_res_slice3 = 0;
-
-bit<1> comp3_flag = 0;
-
-bit<1> comp4_flag = 0;
-
-bit<8> comp5_flag = 0;
+bit<5> class_index = 0;
+bit<2> final_index = 0;
+bit<1> is_split = 0;
+bit<2> split_key = 0;
 
 bit<4> upload_tag = 0;
 bit<3> slice_index = 0;
 //ingress_variable_pos
 	bit<1> test;
 	
-Register<bit<32>, bit<32>>(32w65536) reg_c2_w1;
-Register<bit<32>, bit<32>>(32w65536) reg_c2_w2;
+Register<bit<32>, bit<32>>(32w65536) reg_class0_w1;
+Register<bit<32>, bit<32>>(32w65536) reg_class0_w2;
+Register<bit<32>, bit<32>>(32w65536) reg_class1_w1;
+Register<bit<32>, bit<32>>(32w65536) reg_class1_w2;
+Register<bit<32>, bit<32>>(32w65536) reg_class2_w1;
+Register<bit<32>, bit<32>>(32w65536) reg_class2_w2;
+Register<bit<32>, bit<32>>(32w65536) reg_class3_w1;
+Register<bit<32>, bit<32>>(32w65536) reg_class3_w2;
 Register<bit<1>, bit<32>>(32w65536) reg_c5;
-Register<bit<32>, bit<32>>(32w65536) reg_c_timer1;
-Register<bit<1>, bit<32>>(32w65536) reg_c_timer2;
-Register<bit<1>, bit<32>>(32w65536) reg_c_timer3;
-RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c2_w1) reg_c2_w1_plus = {
+Register<bit<32>, bit<32>>(32w131072) reg_c_timer1;
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class0_w1) reg_class0_w1_plus = {
 	void apply(inout bit<32> value, out bit<32> read_value){
-		value = value + reg_c2_toupdate_value;
+		value = value + reg_toupdate_value;
 		read_value = value;
 	}
 };
-RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c2_w1) reg_c2_w1_update = {
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class0_w1) reg_class0_w1_minus = {
 	void apply(inout bit<32> value, out bit<32> read_value){
-		read_value = value;
-		value = reg_c2_toupdate_value;
-	}
-};
-RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c2_w1) reg_c2_w1_clear = {
-	void apply(inout bit<32> value, out bit<32> read_value){
-		read_value = value;
-		value = 0;
-	}
-};
-RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c2_w1) reg_c2_w1_read = {
-	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value - reg_toupdate_value;
 		read_value = value;
 	}
 };
-RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c2_w2) reg_c2_w2_plus = {
+
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class1_w1) reg_class1_w1_plus = {
 	void apply(inout bit<32> value, out bit<32> read_value){
-		value = value + reg_c2_toupdate_value;
+		value = value + reg_toupdate_value;
 		read_value = value;
 	}
 };
-RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c2_w2) reg_c2_w2_update = {
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class1_w1) reg_class1_w1_minus = {
 	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value - reg_toupdate_value;
 		read_value = value;
-		value = reg_c2_toupdate_value;
 	}
 };
-RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c2_w2) reg_c2_w2_clear = {
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class2_w1) reg_class2_w1_plus = {
 	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value + reg_toupdate_value;
 		read_value = value;
-		value = 0;
 	}
 };
-RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c2_w2) reg_c2_w2_read = {
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class2_w1) reg_class2_w1_minus = {
 	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value - reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class3_w1) reg_class3_w1_plus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value + reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class3_w1) reg_class3_w1_minus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value - reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class0_w2) reg_class0_w2_plus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value + reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class0_w2) reg_class0_w2_minus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value - reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class1_w2) reg_class1_w2_plus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value + reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class1_w2) reg_class1_w2_minus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value - reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class2_w2) reg_class2_w2_plus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value + reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class2_w2) reg_class2_w2_minus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value - reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class3_w2) reg_class3_w2_plus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value + reg_toupdate_value;
+		read_value = value;
+	}
+};
+RegisterAction<bit<32>, bit<32>, bit<32>>(reg_class3_w2) reg_class3_w2_minus = {
+	void apply(inout bit<32> value, out bit<32> read_value){
+		value = value - reg_toupdate_value;
 		read_value = value;
 	}
 };
@@ -240,96 +304,177 @@ RegisterAction<bit<32>, bit<32>, bit<32>>(reg_c_timer1) reg_c_timer1_update = {
 	}
 };
 
-action reg_c2_w1_plus_action(){
-	reg_c2_res = reg_c2_w1_plus.execute(reg_c2_key);
+action reg_class0_w1_plus_action(){
+	reg_class0_w1_res = reg_class0_w1_plus.execute(reg_key);
 }
-
-action reg_c2_w1_update_action(){
-	reg_c2_res = reg_c2_w1_update.execute(reg_c2_key);
+action reg_class0_w1_minus_action(){
+	reg_class0_w1_res = reg_class0_w1_minus.execute(reg_key);
 }
-
-action reg_c2_w1_clear_action(){
-	reg_c2_res = reg_c2_w1_clear.execute(reg_c2_key);
-}
-
-action reg_c2_w1_read_action(){
-	reg_c2_res = reg_c2_w1_read.execute(reg_c2_key);
-}
-table reg_c2_w1_table{
+table reg_class0_w1_table{
 
 	key = {
-		global_time1: exact;
-		reg_c_timer1_res: exact;
+		final_index: exact;
 		ig_intr_md.resubmit_flag: exact;
+		md.a.f3: exact;
 	}
 
 	actions = {
-		reg_c2_w1_plus_action;
-		reg_c2_w1_update_action;
-		reg_c2_w1_clear_action;
-		reg_c2_w1_read_action;
+		reg_class0_w1_plus_action;
+		reg_class0_w1_minus_action;
 	}
 }
 
-action reg_c2_w2_plus_action(){
-	reg_c2_res = reg_c2_w2_plus.execute(reg_c2_key);
+action reg_class1_w1_plus_action(){
+	reg_class1_w1_res = reg_class1_w1_plus.execute(reg_key);
 }
-
-action reg_c2_w2_update_action(){
-	reg_c2_res = reg_c2_w2_update.execute(reg_c2_key);
+action reg_class1_w1_minus_action(){
+	reg_class1_w1_res = reg_class1_w1_minus.execute(reg_key);
 }
-
-action reg_c2_w2_clear_action(){
-	reg_c2_res = reg_c2_w2_clear.execute(reg_c2_key);
-}
-
-action reg_c2_w2_read_action(){
-	reg_c2_res = reg_c2_w2_read.execute(reg_c2_key);
-}
-table reg_c2_w2_table{
+table reg_class1_w1_table{
 
 	key = {
-		global_time1: exact;
-		reg_c_timer1_res: exact;
+		final_index: exact;
 		ig_intr_md.resubmit_flag: exact;
+		md.a.f3: exact;
 	}
 
 	actions = {
-		reg_c2_w2_plus_action;
-		reg_c2_w2_update_action;
-		reg_c2_w2_clear_action;
-		reg_c2_w2_read_action;
+		reg_class1_w1_plus_action;
+		reg_class1_w1_minus_action;
 	}
 }
+
+action reg_class2_w1_plus_action(){
+	reg_class2_w1_res = reg_class2_w1_plus.execute(reg_key);
+}
+action reg_class2_w1_minus_action(){
+	reg_class2_w1_res = reg_class2_w1_minus.execute(reg_key);
+}
+table reg_class2_w1_table{
+
+	key = {
+		final_index: exact;
+		ig_intr_md.resubmit_flag: exact;
+		md.a.f3: exact;
+	}
+
+	actions = {
+		reg_class2_w1_plus_action;
+		reg_class2_w1_minus_action;
+	}
+}
+
+action reg_class3_w1_plus_action(){
+	reg_class3_w1_res = reg_class3_w1_plus.execute(reg_key);
+}
+action reg_class3_w1_minus_action(){
+	reg_class3_w1_res = reg_class3_w1_minus.execute(reg_key);
+}
+table reg_class3_w1_table{
+
+	key = {
+		final_index: exact;
+		ig_intr_md.resubmit_flag: exact;
+		md.a.f3: exact;
+	}
+
+	actions = {
+		reg_class3_w1_plus_action;
+		reg_class3_w1_minus_action;
+	}
+}
+
+action reg_class0_w2_plus_action(){
+	reg_class0_w2_res = reg_class0_w2_plus.execute(reg_key);
+}
+action reg_class0_w2_minus_action(){
+	reg_class0_w2_res = reg_class0_w2_minus.execute(reg_key);
+}
+table reg_class0_w2_table{
+
+	key = {
+		final_index: exact;
+		ig_intr_md.resubmit_flag: exact;
+		md.a.f3: exact;
+	}
+
+	actions = {
+		reg_class0_w2_plus_action;
+		reg_class0_w2_minus_action;
+	}
+}
+
+action reg_class1_w2_plus_action(){
+	reg_class1_w2_res = reg_class1_w2_plus.execute(reg_key);
+}
+action reg_class1_w2_minus_action(){
+	reg_class1_w2_res = reg_class1_w2_minus.execute(reg_key);
+}
+table reg_class1_w2_table{
+
+	key = {
+		final_index: exact;
+		ig_intr_md.resubmit_flag: exact;
+		md.a.f3: exact;
+	}
+
+	actions = {
+		reg_class1_w2_plus_action;
+		reg_class1_w2_minus_action;
+	}
+}
+
+action reg_class2_w2_plus_action(){
+	reg_class2_w2_res = reg_class2_w2_plus.execute(reg_key);
+}
+action reg_class2_w2_minus_action(){
+	reg_class2_w2_res = reg_class2_w2_minus.execute(reg_key);
+}
+table reg_class2_w2_table{
+
+	key = {
+		final_index: exact;
+		ig_intr_md.resubmit_flag: exact;
+		md.a.f3: exact;
+	}
+
+	actions = {
+		reg_class2_w2_plus_action;
+		reg_class2_w2_minus_action;
+	}
+}
+
+action reg_class3_w2_plus_action(){
+	reg_class3_w2_res = reg_class3_w2_plus.execute(reg_key);
+}
+action reg_class3_w2_minus_action(){
+	reg_class3_w2_res = reg_class3_w2_minus.execute(reg_key);
+}
+table reg_class3_w2_table{
+
+	key = {
+		final_index: exact;
+		ig_intr_md.resubmit_flag: exact;
+		md.a.f3: exact;
+	}
+
+	actions = {
+		reg_class3_w2_plus_action;
+		reg_class3_w2_minus_action;
+	}
+}
+
 action reg_c_timer1_update_action(){
-	reg_c_timer1_res = reg_c_timer1_update.execute(reg_c2_key);
+	//get IPD
+	reg_c_timer1_res = reg_c_timer1_update.execute(reg_time_key);
 }
-
-
 table reg_c_timer1_table{
-	key = {
-		reg_c2_key: exact;
-	}
 	actions = {
 		reg_c_timer1_update_action;
 	}
-}
-action extract_reg_c2_slicing_action(bit<32> mask1, bit<32> mask2){
-		reg_c2_reset_flag = reg_c2_res & mask1;
-		extracted_reg_c2_res_slice0= reg_c2_res & mask2;
+	default_action = reg_c_timer1_update_action();
 }
 
-table reg_c2_slicing_table{
-
-	key = {
-		slice_index: exact;
-	}
-
-	actions = {
-		extract_reg_c2_slicing_action;
-	}
-}//ingress_register_pos
-	
 	
 bit<1> tcp_flag = 0;
 action check_tcp_setflag(bit<1> flag){
@@ -344,72 +489,53 @@ table check_tcp_table{
 	}
 }
 
-action reg_c_slices(bit<32> slices){
-	reg_c2_toupdate_value = slices;
-}
-
-table reg_c_dyn_table{
-	key = {
-		slice_index: exact;
-		ig_intr_md.resubmit_flag: exact;
-	}
-	actions = {
-		reg_c_slices;
-	}
-}
-
-
-action comp4_setflag(bit<1> flag){
-	comp4_flag = flag;
-}
-table comp4_table{
-	key = {
-		ig_intr_md.resubmit_flag: exact;
-	}
-	actions = {
-		comp4_setflag;
-	}
-}
-bit<1> tcp_Mflag = 0;
-action tcp_setMflag(){
-	tcp_Mflag = 1;
-}
-table tcp_classification_table{
-	key = {
-		extracted_reg_c2_res_slice0: exact;
-	}
-	actions = {
-		tcp_setMflag;
-	}
-}
-
-action upload_CPU(bit<4> tag){
-	upload_tag = tag;
+action resubmit_CPU(){
+	md.resub_type = md.a.f3;
 }
 table upload_table{
 	key = {
-		tcp_Mflag: exact;
-		comp4_flag: exact;
+		ig_intr_md.resubmit_flag: exact;
 	}
 	actions = {
-		upload_CPU;
+		resubmit_CPU;
 	}
 }
 
- action resubmit_reset(bit<32> content){
+action resubmit_reset(bit<32> content, bit<8> tag){
 	ig_dprsr_md.resubmit_type = DPRSR_DIGEST_TYPE_A;
 	md.a.f1 = content;
+	md.a.f3 = tag;
+}
+action mirror_to_CPU(){
+	md.ing_mir_ses = 10;
+	ig_dprsr_md.mirror_type = 1;;
 }
 table resubmit_table{
 	key = {
-		reg_c2_reset_flag: exact;
+		reg_reset_flag01: exact;
+		reg_reset_flag11: exact;
+		reg_reset_flag21: exact;
+		reg_reset_flag31: exact;
+		reg_reset_flag02: exact;
+		reg_reset_flag12: exact;
+		reg_reset_flag22: exact;
+		reg_reset_flag32: exact;
+		ig_intr_md.resubmit_flag: exact;
 	}
 	actions = {
 		resubmit_reset;
+		mirror_to_CPU;
 	}
 } 
-action special_flowkey(bit<16> key){
-	reg_c2_key[15:0]= key;
+action special_flowkey(bit<17> key){
+	reg_key[16:0]= key;
+}
+action normal_flowkey(){
+	reg_key = reg_time_key;
+}
+action split_flowkey(){
+	reg_key[15:0] = reg_time_key[15:0];
+	split_key[0:0] = reg_time_key[16:16];
 }
 table set_flowkey{
 	key = {
@@ -417,73 +543,189 @@ table set_flowkey{
 		hdr.ipv4.dst_addr: exact;
 		hdr.tcp.src_port: exact;
 		hdr.tcp.dst_port: exact;
+		is_split: exact;
 	}
 	actions = {
 		special_flowkey;
+		normal_flowkey;
+		split_flowkey;
 	}
+	default_action = split_flowkey();
 }
-action normal_timer(){
-		global_time1 = ig_prsr_md.global_tstamp[41:10];  //about 8 seconds
+action normal_timer(bit<1> split_flag){
+		global_time1 = ig_prsr_md.global_tstamp[41:10];  
+		is_split = split_flag;
 	}
 table get_timer{
 	actions = {
 		normal_timer;
-		//sensitive_timer;
-		//dull_timer;
 	}
-	default_action = normal_timer();
+	default_action = normal_timer(1);
 }
-action slicing2(){
-	slice_index = reg_c_timer1_res [31:29] & 0x4;
+
+action extract_reg_slicing_action(bit<32> mask1){
+		reg_reset_flag01 = reg_class0_w1_res & mask1;
+		reg_reset_flag11 = reg_class1_w1_res & mask1;
+		reg_reset_flag21 = reg_class2_w1_res & mask1;
+		reg_reset_flag31 = reg_class3_w1_res & mask1;
+		reg_reset_flag02 = reg_class0_w2_res & mask1;
+		reg_reset_flag12 = reg_class1_w2_res & mask1;
+		reg_reset_flag22 = reg_class2_w2_res & mask1;
+		reg_reset_flag32 = reg_class3_w2_res & mask1;
 }
-action slicing4(){
-	slice_index = reg_c_timer1_res [31:29] & 0x6;
+table reg_slicing_table{
+
+	key = {
+		class_index: exact;
+		ig_intr_md.resubmit_flag: exact;  //must be 0
+	}
+
+	actions = {
+		extract_reg_slicing_action;
+	}
 }
-action slicing8(){
-	slice_index = reg_c_timer1_res [31:29] & 0x7;
+
+action slicing2(bit<1> segment, bit<32> slice){
+	//32-bit --> 16-bitx2
+	reg_key[15:15] = class_index[0:0];
+	final_index = class_index[3:2];
+	reg_toupdate_value = slice;	// class_index[1:1]  1 | 2^16
+}
+action slicing4(bit<1> segment, bit<32> slice){
+	//32-bit --> 8-bitx4
+	final_index = class_index[3:2];
+	reg_toupdate_value = slice;	// class_index[1:0]  1 | 2^8 | 2^16 | 2^24
+}
+action slicing8(bit<1> segment, bit<32> slice){
+	//32-bit --> 4-bitx8
+	final_index = class_index[4:3] + split_key;
+	reg_toupdate_value = slice;	// class_index[2:0]  1 | 2^4 | 2^8 | 2^12 | 2^16 | 2^20 | 2^24 | 2^28
 }
 action no_slicing(){
-	slice_index = 0;
+	reg_key[15:14] = class_index[1:0];
+	final_index = class_index[3:2];
+	reg_toupdate_value = 1;	
 }
 table enable_slicing{
+	key = {
+		class_index: exact;
+		ig_intr_md.resubmit_flag: exact;  // is a resubmit packet? if so, minus secure bit
+	}
 	actions = {
 		slicing2;
 		slicing4;
 		slicing8;
 		no_slicing;
-		//sensitive_timer;
-		//dull_timer;
 	}
 	default_action = no_slicing();
 }
-//ingress_table_pos
+action return_class(bit<4> index){
+	class_index[3:0] = index;
+}
+table map_to_distribution{
+	key = {
+		reg_c_timer1_res: ternary;
+	}
+	actions = {
+		return_class;
+	}
+}
 	
-    apply {
+apply {
 	@stage(0){
 	get_timer.apply();
 	check_tcp_table.apply();
-	//set_timer_mask.apply(); //stage 1  last 2 bit --> 00, 01, 10, 11 --> 6+timer, 4+timer+2, 2+timer+4, timer+6 
-	//reg_c2_key= hash0.get(hdr.ipv4.src_addr);
-	set_flowkey.apply(); //stage 0
-	reg_c_timer1_table.apply(); // stage 1
+	reg_time_key[16:0]= hash0.get({hdr.ipv4.src_addr, hdr.ipv4.dst_addr, hdr.udp.src_port, hdr.udp.dst_port})[16:0];
+			
+	set_flowkey.apply(); 
+	reg_c_timer1_table.apply(); 
+	map_to_distribution.apply(); // map IPD to class
 	enable_slicing.apply();
-	reg_c_dyn_table.apply(); //stage 2
 	
-	reg_c2_w1_table.apply(); 	//stage 2
-	reg_c2_w2_table.apply(); 	//stage 2
-	reg_c2_slicing_table.apply();	//stage 3
-	tcp_classification_table.apply();	//stage 4
-	upload_table.apply();	//stage 5
-	resubmit_table.apply();//ingress_apply_pos
+	reg_class0_w1_table.apply(); 
+	reg_class1_w1_table.apply(); 
+	reg_class2_w1_table.apply(); 
+	reg_class3_w1_table.apply(); 
+	reg_class0_w2_table.apply(); 
+	reg_class1_w2_table.apply(); 
+	reg_class2_w2_table.apply(); 
+	reg_class3_w2_table.apply(); 	
+
+
+	reg_slicing_table.apply();	
+	upload_table.apply();	
+	resubmit_table.apply();
 	}
     }
 }
+parser SwitchEgressParser(
+        packet_in pkt,
+        out header_t hdr,
+        out metadata_t eg_md,
+        out egress_intrinsic_metadata_t eg_intr_md) {
 
+    TofinoEgressParser() tofino_parser;
+
+    state start {
+        tofino_parser.apply(pkt, eg_intr_md);
+		upload_h upload_md;
+		pkt.extract(upload_md);
+		eg_md.resub_type = upload_md.upload_type;
+		transition parse_ethernet;
+	}
+	state parse_ethernet{
+		pkt.extract(hdr.ethernet);
+		transition select(hdr.ethernet.ether_type){
+			0x800: parse_ipv4;
+			default: reject;
+		}
+	}
+    state parse_ipv4{
+        pkt.extract(hdr.ipv4);
+        transition accept;
+    }
+}
+
+
+control SwitchEgressDeparser(
+        packet_out pkt,
+        inout header_t hdr,
+        in metadata_t eg_md,
+        in egress_intrinsic_metadata_for_deparser_t eg_dprsr_md) {
+
+
+
+    apply {
+		pkt.emit(hdr);
+    }
+}
+
+
+/*************************************************************************
+****************  E G R E S S   P R O C E S S I N G   *******************
+*************************************************************************/
+
+control SwitchEgress( inout header_t hdr,
+        inout metadata_t meta,
+        in    egress_intrinsic_metadata_t                 eg_intr_md,
+        in    egress_intrinsic_metadata_from_parser_t     eg_prsr_md,
+        inout egress_intrinsic_metadata_for_deparser_t    eg_dprsr_md,
+        inout egress_intrinsic_metadata_for_output_port_t eg_oport_md) {
+	apply{
+		hdr.ipv4.diffserv = meta.resub_type;
+		
+	}
+}
+
+
+/*************************************************************************
+***********************  S W I T C H  *******************************
+*************************************************************************/
 Pipeline(SwitchIngressParser(),
          SwitchIngress(),
          SwitchIngressDeparser(),
-         EmptyEgressParser(),
-         EmptyEgress(),
-         EmptyEgressDeparser()) pipe;
+         SwitchEgressParser(),
+         SwitchEgress(),
+         SwitchEgressDeparser()) pipe;
 
 Switch(pipe) main;
